@@ -6,8 +6,8 @@
     <group
         android:scaleX="0.72"
         android:scaleY="0.72"
-        android:translateX="150"
-        android:translateY="150">
+        android:translateX="140"
+        android:translateY="140">
 
         <path
             android:pathData="M422.46,587.46L422.46,378.34L586.76,482.9Z"

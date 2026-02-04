@@ -62,8 +62,6 @@ class ScreamAudioService : Service() {
     private var socket: DatagramSocket? = null
     private var screamServerAddress: InetAddress? = null
     private var screamServerPort = SCREAM_PORT
-    private var channels = 2
-    private val channelMap = 0x03 // Channel map (stereo = 0x01 || 0x02 = 0x03)  // https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ksmedia/ns-ksmedia-waveformatextensible
 
     @Volatile
     private var isCapturing = false
