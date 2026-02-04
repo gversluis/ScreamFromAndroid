@@ -12,7 +12,9 @@ import android.os.Bundle
 import android.text.Editable
 import android.text.TextWatcher
 import android.widget.Button
+import android.widget.CheckBox
 import android.widget.EditText
+import android.widget.RadioGroup
 import android.widget.Toast
 import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
@@ -20,6 +22,7 @@ import androidx.annotation.RequiresApi
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import androidx.core.view.children
 
 /**
  * Main activity to control Scream audio streaming
@@ -35,6 +38,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var serverIpEditText: EditText
     private lateinit var serverPortEditText: EditText
     private lateinit var button: Button
+    private lateinit var channels: RadioGroup
+    private lateinit var mute: CheckBox
 
     private var mediaProjectionResultCode: Int = -1
     private var mediaProjectionResultData: Intent? = null
@@ -54,13 +59,33 @@ class MainActivity : AppCompatActivity() {
             })
         }
 
+        val prefs = this.applicationContext.getSharedPreferences("user_prefs", Context.MODE_PRIVATE)
         serverIpEditText = findViewById(R.id.serverIpEditText)
         serverPortEditText = findViewById(R.id.serverPortEditText)
         button = findViewById(R.id.button)
-        serverIpEditText.setText(loadUserInput(this, "SCREAM_IP", ScreamAudioService.SCREAM_IP))
-        serverPortEditText.setText(loadUserInput(this, "SCREAM_PORT", ScreamAudioService.SCREAM_PORT.toString()))
-        serverIpEditText.onTextChanged { text -> saveUserInput(this, "SCREAM_IP", text) }
-        serverPortEditText.onTextChanged { text -> saveUserInput(this, "SCREAM_PORT", text) }
+        channels = findViewById( R.id.channels)
+        mute = findViewById( R.id.mute)
+
+        // load saved values or fall back to default
+        serverIpEditText.setText(prefs.getString("SCREAM_IP", ScreamAudioService.SCREAM_IP))
+        serverPortEditText.setText(prefs.getInt("SCREAM_PORT", ScreamAudioService.SCREAM_PORT).toString())
+        channels.check(when (prefs.getInt("SCREAM_CHANNELS", 2)) {
+            1 ->  R.id.mono
+            else -> R.id.stereo
+        })
+        mute.isChecked = prefs.getBoolean("SCREAM_MUTE", true)
+
+        // save on changes
+        serverIpEditText.onTextChanged { text -> prefs.edit().putString("SCREAM_IP", text).apply() }
+        serverPortEditText.onTextChanged { text -> prefs.edit().putInt("SCREAM_PORT", text.toInt()).apply() }
+        channels.setOnCheckedChangeListener { group, checkedId ->
+            val channels = when (checkedId) {
+                R.id.mono -> 1
+                else -> 2   // stereo = default
+            }
+            prefs.edit().putInt("SCREAM_CHANNELS", channels).apply()
+        }
+        mute.setOnCheckedChangeListener { buttonView, isChecked -> prefs.edit().putBoolean("SCREAM_MUTE", isChecked).apply()        }
 
         updateButtonStates()
     }
@@ -131,16 +156,6 @@ class MainActivity : AppCompatActivity() {
                 )
             }
         }
-    }
-
-    fun saveUserInput(context: Context, key: String, value: String) {
-        val prefs = context.getSharedPreferences("user_prefs", Context.MODE_PRIVATE)
-        prefs.edit().putString(key, value).apply()
-    }
-
-    fun loadUserInput(context: Context, key: String, default: String = ""): String {
-        val prefs = context.getSharedPreferences("user_prefs", Context.MODE_PRIVATE)
-        return prefs.getString(key, default) ?: default
     }
 
     private fun startStreaming() {
@@ -245,6 +260,9 @@ class MainActivity : AppCompatActivity() {
     private fun updateButtonStates() {
         serverIpEditText.isEnabled = !isStreaming
         serverPortEditText.isEnabled = !isStreaming
+        for (i in 0 until channels.childCount) channels.getChildAt(i).isEnabled = !isStreaming
+        mute.isEnabled = !isStreaming
+
         if (!hasPermissions()) {
             button.setBackgroundColor(Color.TRANSPARENT)
             button.setText("Request audio permissions")

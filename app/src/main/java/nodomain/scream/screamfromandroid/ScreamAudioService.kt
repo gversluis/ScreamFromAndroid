@@ -9,10 +9,12 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.media.AudioAttributes
 import android.media.AudioFormat
+import android.media.AudioManager
 import android.media.AudioPlaybackCaptureConfiguration
 import android.media.AudioRecord
 import android.media.MediaRecorder
@@ -20,16 +22,20 @@ import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
 import android.os.Build
 import android.os.IBinder
+import android.support.v4.media.session.MediaSessionCompat
+import android.support.v4.media.session.PlaybackStateCompat
 import android.util.Log
 import android.widget.Toast
 import androidx.annotation.RequiresPermission
 import androidx.core.app.ActivityCompat
 import androidx.core.app.NotificationCompat
+import androidx.media.VolumeProviderCompat
 import java.io.IOException
 import java.net.DatagramPacket
 import java.net.DatagramSocket
 import java.net.InetAddress
 import java.nio.ByteBuffer
+import kotlin.math.roundToInt
 
 /**
  * Service that captures device audio and streams it to a Scream receiver
@@ -46,19 +52,18 @@ class ScreamAudioService : Service() {
         private const val SAMPLE_RATE = 44100
         private const val MULTIPLIER = 1
         private const val BITS_PER_SAMPLE = 16
-        private const val CHANNELS = 2
-        private const val CHANNEL_MAP = 0x03 // Channel map (stereo = 0x01 || 0x02 = 0x03)  // https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ksmedia/ns-ksmedia-waveformatextensible
-        
         const val SCREAM_IP = "239.255.77.77" // Default Scream IP broadcast
         const val SCREAM_PORT = 4010 // Default Scream UDP port
 
-        private const val PACKET_SIZE = 512  // should be 1152 but smaller packets work better, excludes 5 byte header
+        private const val PACKET_SIZE = 1152  // should be 1152 but smaller packets seem to cause less stutter, excludes 5 byte header
     }
 
     private var audioRecord: AudioRecord? = null
     private var socket: DatagramSocket? = null
     private var screamServerAddress: InetAddress? = null
     private var screamServerPort = SCREAM_PORT
+    private var channels = 2
+    private val channelMap = 0x03 // Channel map (stereo = 0x01 || 0x02 = 0x03)  // https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ksmedia/ns-ksmedia-waveformatextensible
 
     @Volatile
     private var isCapturing = false
@@ -67,6 +72,12 @@ class ScreamAudioService : Service() {
     private var mediaProjection: MediaProjection? = null
     private var resultCode: Int = -1
     private var resultData: Intent? = null
+
+    private lateinit var audioManager: AudioManager
+
+    private lateinit var mediaSession: MediaSessionCompat
+    private var originalVolume: Int? = null
+    private var screamVolume: Float = 1.0f
 
     override fun onCreate() {
         super.onCreate()
@@ -112,33 +123,71 @@ class ScreamAudioService : Service() {
 
     @RequiresPermission(Manifest.permission.RECORD_AUDIO)
     private fun startCapture(serverIp: String) {
+        val prefs = this.applicationContext.getSharedPreferences("user_prefs", Context.MODE_PRIVATE)
+        val channels = prefs.getInt("SCREAM_CHANNELS", 2)
+
+        // make extra volume bar for streaming
+        mediaSession = MediaSessionCompat(this, "ScreamService")
+        mediaSession.isActive = true
+        screamVolume = prefs.getFloat("SCREAM_VOLUME", screamVolume)
+        mediaSession.setPlaybackToRemote(object : VolumeProviderCompat(
+            VolumeProviderCompat.VOLUME_CONTROL_ABSOLUTE, 10, (screamVolume * 10).toInt()
+        ) {
+            override fun onSetVolumeTo(volume: Int) {
+                screamVolume = (volume / 10f).coerceIn(0f, 1f)
+                Log.d(TAG, "SetVolumeTo volume=$volume, screamVolume=$screamVolume")
+                setCurrentVolume((screamVolume * 10).roundToInt())  // weird work around because it otherwise jumps back to 100%
+                prefs.edit().putFloat("SCREAM_VOLUME",  screamVolume).apply()
+            }
+
+            override fun onAdjustVolume(direction: Int) {
+                Log.d(TAG, "onAdjustVolume volume=$direction, screamVolume=$screamVolume")
+                this.onSetVolumeTo ( ((screamVolume * 10).roundToInt() + direction).coerceIn(0, 10) )
+                prefs.edit().putFloat("SCREAM_VOLUME",  screamVolume).apply()
+                super.onAdjustVolume(direction)
+            }
+        })
+        audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager  // to get current device volume
+
+        // PlaybackState puts the stream volume mixer as active
+        val playbackState = PlaybackStateCompat.Builder()
+            .setState(PlaybackStateCompat.STATE_PLAYING, 0, 1f)
+            .setActions(
+                PlaybackStateCompat.ACTION_PLAY or
+                        PlaybackStateCompat.ACTION_PAUSE or
+                        PlaybackStateCompat.ACTION_PLAY_PAUSE
+            )
+            .build()
+        mediaSession.setPlaybackState(playbackState)
+
+
         if (isCapturing) {
             Log.w(TAG, "Already capturing")
             return
         }
 
         try {
-            // Initialize server address
             screamServerAddress = InetAddress.getByName(serverIp)
-
-            // Initialize UDP socket
             socket = DatagramSocket()
-
-            // Initialize MediaProjection for audio capture
             val projectionManager = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
             mediaProjection = projectionManager.getMediaProjection(resultCode, resultData!!)
 
-            // Calculate buffer size
             val bufferSize = AudioRecord.getMinBufferSize(
                 SAMPLE_RATE,
-                AudioFormat.CHANNEL_IN_STEREO,
+                when (channels) {
+                    1 -> AudioFormat.CHANNEL_IN_MONO
+                    else ->AudioFormat.CHANNEL_IN_STEREO
+                },
                 AudioFormat.ENCODING_PCM_16BIT
             ) * 2 // Double buffer for safety
 
             val audioFormat = AudioFormat.Builder()
                 .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
                 .setSampleRate(SAMPLE_RATE)
-                .setChannelMask(AudioFormat.CHANNEL_IN_STEREO)
+                .setChannelMask(when (channels) {
+                    1 -> AudioFormat.CHANNEL_IN_MONO
+                    else ->AudioFormat.CHANNEL_IN_STEREO
+                })
                 .build()
 
             // For Android 10+, use PLAYBACK capture to get internal audio
@@ -160,15 +209,17 @@ class ScreamAudioService : Service() {
                 AudioRecord(
                     MediaRecorder.AudioSource.DEFAULT,
                     SAMPLE_RATE,
-                    AudioFormat.CHANNEL_IN_STEREO,
+                    when (channels) {
+                        1 -> AudioFormat.CHANNEL_IN_MONO
+                        else ->AudioFormat.CHANNEL_IN_STEREO
+                    },
                     AudioFormat.ENCODING_PCM_16BIT,
                     bufferSize
                 )
             }
 
-            // Start capture thread
             isCapturing = true
-            captureThread = Thread { captureAndStream() }.apply { start() }
+            captureThread = Thread { captureAndStream(channels) }.apply { start() }
 
             audioRecord?.startRecording()
 
@@ -178,9 +229,12 @@ class ScreamAudioService : Service() {
             Log.i(TAG, "AudioRecord initialized - State: $state, RecordingState: $recordingState")
             Log.i(TAG, "Audio capture started, streaming to $serverIp:$screamServerPort")
 
-            // Log the header we're using
-            // val headerHex = screamHeader.joinToString(" ") { "%02X".format(it) }
-            // Log.d(TAG, "Scream header: $headerHex")
+            val prefs = this.applicationContext.getSharedPreferences("user_prefs", Context.MODE_PRIVATE)
+            val mute = prefs.getBoolean("SCREAM_MUTE", true)
+            if (mute) {
+                originalVolume = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
+                audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, 0, 0)
+            }
 
         } catch (e: Exception) {
             Log.e(TAG, "Error starting capture", e)
@@ -189,9 +243,15 @@ class ScreamAudioService : Service() {
         }
     }
 
-    private fun captureAndStream() {
+    private fun changeVolume(buffer: ByteArray, volume: Float) {
+        for (i in buffer.indices) {
+            buffer[i] = (buffer[i] * volume).toInt().coerceIn(Byte.MIN_VALUE.toInt(), Byte.MAX_VALUE.toInt()).toByte()
+        }
+    }
+
+    private fun captureAndStream(channels: Number) {
         val buffer = ByteArray(PACKET_SIZE)
-        val screamHeader = createScreamHeader()
+        val screamHeader = createScreamHeader(channels)
         val packetBuffer = ByteBuffer.allocate(screamHeader.size + PACKET_SIZE)
 
         var packetCount = 0
@@ -199,6 +259,7 @@ class ScreamAudioService : Service() {
         while (isCapturing) {
             try {
                 val bytesRead = audioRecord?.read(buffer, 0, PACKET_SIZE) ?: 0
+                changeVolume(buffer, screamVolume)
                 if (bytesRead > 0 && !isSilent(buffer, bytesRead)) {
                     sendScreamPacket(buffer, bytesRead, screamHeader, packetBuffer)
                     packetCount++
@@ -250,12 +311,15 @@ class ScreamAudioService : Service() {
      * - Byte 2: Number of channels (1-8)
      * - Bytes 3-4: Channel map (little endian)
      */
-    private fun createScreamHeader(): ByteArray {
+    private fun createScreamHeader(channels: Number): ByteArray {
         return byteArrayOf(
             (0x80 or (MULTIPLIER and 0x7F)).toByte(),  // Sample rate bit 7: 1 = 44100 Hz, and 0 = 48000 Hz
             BITS_PER_SAMPLE.toByte(), // Bits per sample
-            CHANNELS.toByte(),      // Number of channels
-            CHANNEL_MAP.toByte(),   // Channel map (stereo = 0x01 || 0x02 = 0x03)  // https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ksmedia/ns-ksmedia-waveformatextensible
+            channels.toByte(),      // Number of channels
+            when (channels) {   // Channel map (stereo = 0x01 || 0x02 = 0x03)  // https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ksmedia/ns-ksmedia-waveformatextensible
+                1 -> 0x01.toByte()
+                else -> 0x03.toByte()
+            },
             0x00                    // Little endian
         )
     }
@@ -271,7 +335,8 @@ class ScreamAudioService : Service() {
                 Thread.currentThread().interrupt()
             }
         }
-
+        val currentVolume = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
+        if (originalVolume != null && currentVolume == 0) audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, originalVolume!!, 0)
         cleanup()
         stopForeground(true)
         stopSelf()
@@ -350,8 +415,9 @@ class ScreamAudioService : Service() {
     }
 
     override fun onDestroy() {
-        super.onDestroy()
         stopCapture()
+        mediaSession.release()
+        super.onDestroy()
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
