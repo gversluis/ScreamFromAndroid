@@ -168,7 +168,7 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
-        val port = try {
+        try {
             portStr.toInt()
         } catch (e: NumberFormatException) {
             Toast.makeText(this, "Invalid port number", Toast.LENGTH_SHORT).show()
