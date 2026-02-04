@@ -1,16 +1,14 @@
 package nodomain.scream.screamfromandroid
 
 import android.Manifest
-import android.app.Activity
-import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.graphics.Color
 import android.media.projection.MediaProjectionManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
-import android.text.Editable
-import android.text.TextWatcher
+import android.provider.Settings
+import android.util.TypedValue
 import android.widget.Button
 import android.widget.CheckBox
 import android.widget.EditText
@@ -18,11 +16,9 @@ import android.widget.RadioGroup
 import android.widget.Toast
 import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.annotation.RequiresApi
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
-import androidx.core.view.children
 
 /**
  * Main activity to control Scream audio streaming
@@ -45,21 +41,13 @@ class MainActivity : AppCompatActivity() {
     private var mediaProjectionResultData: Intent? = null
     private var isStreaming = false
 
+    fun EditText.getTrimmedString():String { return this.text.toString().trim() }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
-        fun EditText.onTextChanged(action: (String) -> Unit) {
-            addTextChangedListener(object : TextWatcher {
-                override fun afterTextChanged(s: Editable?) {
-                    action(s.toString())
-                }
-                override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
-                override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
-            })
-        }
-
-        val prefs = this.applicationContext.getSharedPreferences("user_prefs", Context.MODE_PRIVATE)
+        val prefs = this.applicationContext.getSharedPreferences("user_prefs", MODE_PRIVATE)
         serverIpEditText = findViewById(R.id.serverIpEditText)
         serverPortEditText = findViewById(R.id.serverPortEditText)
         button = findViewById(R.id.button)
@@ -76,8 +64,8 @@ class MainActivity : AppCompatActivity() {
         mute.isChecked = prefs.getBoolean("SCREAM_MUTE", true)
 
         // save on changes
-        serverIpEditText.onTextChanged { text -> prefs.edit().putString("SCREAM_IP", text).apply() }
-        serverPortEditText.onTextChanged { text -> prefs.edit().putInt("SCREAM_PORT", text.toInt()).apply() }
+        serverIpEditText.setOnFocusChangeListener { _, hasFocus -> if (!hasFocus) { if (serverIpEditText.getTrimmedString() == "") serverIpEditText.setText(ScreamAudioService.SCREAM_IP); prefs.edit().putString("SCREAM_IP", serverIpEditText.getTrimmedString()).apply() }}
+        serverPortEditText.setOnFocusChangeListener { _, hasFocus -> if (!hasFocus) { if (serverPortEditText.getTrimmedString() == "") serverPortEditText.setText(ScreamAudioService.SCREAM_PORT.toString()); prefs.edit().putInt("SCREAM_PORT", serverPortEditText.getTrimmedString().toInt()).apply() }}
         channels.setOnCheckedChangeListener { group, checkedId ->
             val channels = when (checkedId) {
                 R.id.mono -> 1
@@ -123,7 +111,6 @@ class MainActivity : AppCompatActivity() {
     }
 
     fun getRequestPermissionsLauncher(): ActivityResultLauncher<Array<String>?> {
-        val runtimePermissions = getPermissions()
         val permissionLauncher = registerForActivityResult(
             ActivityResultContracts.RequestMultiplePermissions()
         ) { results ->
@@ -134,14 +121,18 @@ class MainActivity : AppCompatActivity() {
                         "Required permission denied: $perm",
                         Toast.LENGTH_SHORT
                     ).show()
+                    val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                        data = Uri.fromParts("package", packageName, null)
+                    }
+                    startActivity(intent)
                 }
             }
+            updateButtonStates()
         }
         return permissionLauncher
     }
     fun requestPermissions() {
         permissionLauncher.launch(getMissingPermissions())
-        updateButtonStates()
     }
 
     private fun requestAudioPermission() {
@@ -160,8 +151,8 @@ class MainActivity : AppCompatActivity() {
 
     private fun startStreaming() {
         requestPermissions()
-        val serverIp = serverIpEditText.text.toString().trim()
-        val portStr = serverPortEditText.text.toString().trim()
+        val serverIp = serverIpEditText.getTrimmedString()
+        val portStr = serverPortEditText.getTrimmedString()
 
         if (serverIp.isEmpty()) {
             Toast.makeText(this, "Please enter server IP address", Toast.LENGTH_SHORT).show()
@@ -207,12 +198,12 @@ class MainActivity : AppCompatActivity() {
         super.onActivityResult(requestCode, resultCode, data)
 
         if (requestCode == REQUEST_MEDIA_PROJECTION) {
-            if (resultCode == Activity.RESULT_OK && data != null) {
+            if (resultCode == RESULT_OK && data != null) {
                 mediaProjectionResultCode = resultCode
                 mediaProjectionResultData = data
 
-                val serverIp = serverIpEditText.text.toString().trim()
-                val port = serverPortEditText.text.toString().trim().toIntOrNull() ?: 4010
+                val serverIp = serverIpEditText.getTrimmedString()
+                val port = serverPortEditText.getTrimmedString().toIntOrNull() ?: 4010
 
                 val intent = Intent(this, ScreamAudioService::class.java).apply {
                     action = "START_CAPTURE"
@@ -264,7 +255,7 @@ class MainActivity : AppCompatActivity() {
         mute.isEnabled = !isStreaming
 
         if (!hasPermissions()) {
-            button.setBackgroundColor(Color.TRANSPARENT)
+            button.setBackgroundColor(TypedValue().also { theme.resolveAttribute(com.google.android.material.R.attr.colorButtonNormal, it, true) }.data)
             button.setText("Request audio permissions")
             button.setOnClickListener { requestPermissions() }
         } else if (isStreaming) {

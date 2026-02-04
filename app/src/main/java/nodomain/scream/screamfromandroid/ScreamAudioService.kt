@@ -9,7 +9,7 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
-import android.content.Context
+import android.content.SharedPreferences
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.media.AudioAttributes
@@ -35,6 +35,7 @@ import java.net.DatagramPacket
 import java.net.DatagramSocket
 import java.net.InetAddress
 import java.nio.ByteBuffer
+import kotlin.math.max
 import kotlin.math.roundToInt
 
 /**
@@ -71,7 +72,7 @@ class ScreamAudioService : Service() {
     private var resultCode: Int = -1
     private var resultData: Intent? = null
 
-    private lateinit var audioManager: AudioManager
+    private var audioManager: AudioManager? = null
 
     private lateinit var mediaSession: MediaSessionCompat
     private var originalVolume: Int? = null
@@ -119,17 +120,13 @@ class ScreamAudioService : Service() {
         return START_STICKY
     }
 
-    @RequiresPermission(Manifest.permission.RECORD_AUDIO)
-    private fun startCapture(serverIp: String) {
-        val prefs = this.applicationContext.getSharedPreferences("user_prefs", Context.MODE_PRIVATE)
-        val channels = prefs.getInt("SCREAM_CHANNELS", 2)
-
+    private fun setupVolumeMixer(prefs: SharedPreferences) {
         // make extra volume bar for streaming
         mediaSession = MediaSessionCompat(this, "ScreamService")
         mediaSession.isActive = true
         screamVolume = prefs.getFloat("SCREAM_VOLUME", screamVolume)
         mediaSession.setPlaybackToRemote(object : VolumeProviderCompat(
-            VolumeProviderCompat.VOLUME_CONTROL_ABSOLUTE, 10, (screamVolume * 10).toInt()
+            VOLUME_CONTROL_ABSOLUTE, 10, (screamVolume * 10).toInt()
         ) {
             override fun onSetVolumeTo(volume: Int) {
                 screamVolume = (volume / 10f).coerceIn(0f, 1f)
@@ -145,7 +142,6 @@ class ScreamAudioService : Service() {
                 super.onAdjustVolume(direction)
             }
         })
-        audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager  // to get current device volume
 
         // PlaybackState puts the stream volume mixer as active
         val playbackState = PlaybackStateCompat.Builder()
@@ -157,7 +153,13 @@ class ScreamAudioService : Service() {
             )
             .build()
         mediaSession.setPlaybackState(playbackState)
+    }
 
+    @RequiresPermission(Manifest.permission.RECORD_AUDIO)
+    private fun startCapture(serverIp: String) {
+        val prefs = this.applicationContext.getSharedPreferences("user_prefs", MODE_PRIVATE)
+        val channels = prefs.getInt("SCREAM_CHANNELS", 2)
+        setupVolumeMixer(prefs)
 
         if (isCapturing) {
             Log.w(TAG, "Already capturing")
@@ -170,7 +172,7 @@ class ScreamAudioService : Service() {
             val projectionManager = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
             mediaProjection = projectionManager.getMediaProjection(resultCode, resultData!!)
 
-            val bufferSize = AudioRecord.getMinBufferSize(
+            var bufferSize = AudioRecord.getMinBufferSize(
                 SAMPLE_RATE,
                 when (channels) {
                     1 -> AudioFormat.CHANNEL_IN_MONO
@@ -178,6 +180,7 @@ class ScreamAudioService : Service() {
                 },
                 AudioFormat.ENCODING_PCM_16BIT
             ) * 2 // Double buffer for safety
+            bufferSize = max(bufferSize, PACKET_SIZE * 2)
 
             val audioFormat = AudioFormat.Builder()
                 .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
@@ -227,11 +230,11 @@ class ScreamAudioService : Service() {
             Log.i(TAG, "AudioRecord initialized - State: $state, RecordingState: $recordingState")
             Log.i(TAG, "Audio capture started, streaming to $serverIp:$screamServerPort")
 
-            val prefs = this.applicationContext.getSharedPreferences("user_prefs", Context.MODE_PRIVATE)
             val mute = prefs.getBoolean("SCREAM_MUTE", true)
             if (mute) {
-                originalVolume = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
-                audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, 0, 0)
+                audioManager = getSystemService(AUDIO_SERVICE) as AudioManager  // to get current device volume
+                originalVolume = audioManager?.getStreamVolume(AudioManager.STREAM_MUSIC)
+                audioManager?.setStreamVolume(AudioManager.STREAM_MUSIC, 0, 0)
             }
 
         } catch (e: Exception) {
@@ -242,8 +245,11 @@ class ScreamAudioService : Service() {
     }
 
     private fun changeVolume(buffer: ByteArray, volume: Float) {
-        for (i in buffer.indices) {
-            buffer[i] = (buffer[i] * volume).toInt().coerceIn(Byte.MIN_VALUE.toInt(), Byte.MAX_VALUE.toInt()).toByte()
+        if (volume<1) {
+            for (i in buffer.indices) {
+                buffer[i] = (buffer[i] * volume).toInt()
+                    .coerceIn(Byte.MIN_VALUE.toInt(), Byte.MAX_VALUE.toInt()).toByte()
+            }
         }
     }
 
@@ -333,8 +339,10 @@ class ScreamAudioService : Service() {
                 Thread.currentThread().interrupt()
             }
         }
-        val currentVolume = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
-        if (originalVolume != null && currentVolume == 0) audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, originalVolume!!, 0)
+        if (audioManager!=null) {
+            val currentVolume = audioManager?.getStreamVolume(AudioManager.STREAM_MUSIC)
+            if (originalVolume != null && currentVolume == 0) audioManager?.setStreamVolume(AudioManager.STREAM_MUSIC,originalVolume!!,0)
+        }
         cleanup()
         stopForeground(true)
         stopSelf()
