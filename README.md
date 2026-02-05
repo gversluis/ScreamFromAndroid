@@ -25,7 +25,7 @@ I wrote this for my own use so it is not tested except for my current Android.
 ---
 ## 🏛️ Background
 
-My girlfriend was playing a part on the piano. I wanted to let her hear the original. Usually I did streaming with bluetooth which started stuttering everytime something was inbetween me and the receiver.
+My girlfriend was playing a part on the piano. I wanted to let her hear the original. Usually I did streaming with bluetooth which started stuttering every time something was between me and the receiver.
 
 I recently setup Scream from my desktop. Maybe there would also be an Android client.
 
@@ -49,7 +49,7 @@ So I fixed the code and had a POC. In the meantime I made a few improvements and
 
 1. Setup your [Scream receiver](https://github.com/duncanthrax/scream)
 2. Download the APK from the [Releases](https://github.com/gversluis/ScreamFromAndroid/releases)
-3. Grant Permissions before streaming
+3. Grant permissions before streaming
 4. Configure app, default values are predefined so it should be a click and go for a default setup
 5. Click "Start streaming"
 6. When asked to share your screen pick "Share one app" or "Share entire screen". It does not seem to matter which app, audio is always streamed.
@@ -61,11 +61,11 @@ So I fixed the code and had a POC. In the meantime I made a few improvements and
 Source: [https://github.com/duncanthrax/scream]
 
 - [Scream](https://github.com/martinellimarco/scream-android/), Android receiver
-- [Scream](https://github.com/duncanthrax/scream/tree/master/Receivers/unix) *nix receiver for Redhat, CentOS, Debian, Ubuntu, etc. (Also/PulseAudio/Jack)
+- [Scream](https://github.com/duncanthrax/scream/tree/master/Receivers/unix) *nix receiver for Redhat, CentOS, Debian, Ubuntu, etc. (Alsa/PulseAudio/Jack)
 - [Windows: ScreamReader](https://github.com/duncanthrax/scream/releases) by @MrShoenel, Windows receiver included in the installer package as of version 1.2
 - [Cornrow](https://github.com/mincequi/cornrow) Linux audio sink daemon
-- [STM32F429 Scream receiver](https://tomeko.net/projects/scream_eth/) Embedded stream receiver. You might need to change the sourcecode so it accepts 44100Hz audio
-- [ESP32 Scream receiver](https://tomeko.net/projects/esp32_rtp_pager/) Embedded stream receiver. You might need to change the sourcecode so it accepts 44100Hz audio
+- [STM32F429 Scream receiver](https://tomeko.net/projects/scream_eth/) Embedded stream receiver. You might need to change the source code so it accepts 44100Hz audio
+- [ESP32 Scream receiver](https://tomeko.net/projects/esp32_rtp_pager/) Embedded stream receiver. You might need to change the source code so it accepts 44100Hz audio
 
 ---
 ## 🚨 Troubleshooting
