@@ -3,6 +3,7 @@ package nodomain.scream.screamfromandroid
 // PACKET_SIZE = 1152 + HEADER_SIZE
 
 import android.Manifest
+import android.R
 import android.app.Activity
 import android.app.Notification
 import android.app.NotificationChannel
@@ -35,6 +36,7 @@ import java.net.DatagramPacket
 import java.net.DatagramSocket
 import java.net.InetAddress
 import java.nio.ByteBuffer
+import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.roundToInt
 
@@ -76,7 +78,7 @@ class ScreamAudioService : Service() {
 
     private lateinit var mediaSession: MediaSessionCompat
     private var originalVolume: Int? = null
-    private var screamVolume: Float = 1.0f
+    private var screamVolume: Int = 0x10000 // int because recalculate volume in int is much faster than float
 
     override fun onCreate() {
         super.onCreate()
@@ -124,21 +126,26 @@ class ScreamAudioService : Service() {
         // make extra volume bar for streaming
         mediaSession = MediaSessionCompat(this, "ScreamService")
         mediaSession.isActive = true
-        screamVolume = prefs.getFloat("SCREAM_VOLUME", screamVolume)
+        try {
+            screamVolume = prefs.getInt("SCREAM_VOLUME", screamVolume)
+        } catch(e: ClassCastException) {
+            Log.i(TAG, "Restoring stored volume setting from v1.1 and earlier")
+            screamVolume = (prefs.getFloat("SCREAM_VOLUME",screamVolume.toFloat()/0x10000) * 0x10000).toInt()
+        }
+
         mediaSession.setPlaybackToRemote(object : VolumeProviderCompat(
             VOLUME_CONTROL_ABSOLUTE, 10, (screamVolume * 10).toInt()
         ) {
             override fun onSetVolumeTo(volume: Int) {
-                screamVolume = (volume / 10f).coerceIn(0f, 1f)
+                screamVolume = (volume * 0x10000 / 10).coerceIn(0, 0x10000)
                 Log.d(TAG, "SetVolumeTo volume=$volume, screamVolume=$screamVolume")
-                setCurrentVolume((screamVolume * 10).roundToInt())  // weird work around because it otherwise jumps back to 100%
-                prefs.edit().putFloat("SCREAM_VOLUME",  screamVolume).apply()
+                setCurrentVolume((screamVolume.toFloat() * 10 / 0x10000).roundToInt())  // weird work around because it otherwise jumps back to 100%
+                prefs.edit().putInt("SCREAM_VOLUME",  screamVolume).apply()
             }
 
             override fun onAdjustVolume(direction: Int) {
                 Log.d(TAG, "onAdjustVolume volume=$direction, screamVolume=$screamVolume")
-                this.onSetVolumeTo ( ((screamVolume * 10).roundToInt() + direction).coerceIn(0, 10) )
-                prefs.edit().putFloat("SCREAM_VOLUME",  screamVolume).apply()
+                this.onSetVolumeTo (((screamVolume.toFloat() * 10 / 0x10000).roundToInt() + direction).coerceIn(0, 10) )
                 super.onAdjustVolume(direction)
             }
         })
@@ -244,13 +251,20 @@ class ScreamAudioService : Service() {
         }
     }
 
-    private fun changeVolume(buffer: ByteArray, volume: Float) {
-        if (volume<1) {
-            for (i in buffer.indices) {
-                buffer[i] = (buffer[i] * volume).toInt()
-                    .coerceIn(Byte.MIN_VALUE.toInt(), Byte.MAX_VALUE.toInt()).toByte()
+    private fun isSilentAndChangeVolume(buffer: ByteArray, bytesRead: Int, volume: Int, silenceThreshold: Int = 200): Boolean {
+        var maxAmplitude = 0
+        for (i in 0 until bytesRead step 2) {
+            val sample = (buffer[i + 1].toInt() shl 8) or (buffer[i].toInt() and 0xFF)
+            if (volume<0x10000) {
+                val adjusted = ((sample.toShort() * volume) shr 16).coerceIn(-32768, 32767)
+                buffer[i] = adjusted.toByte()
+                buffer[i + 1] = (adjusted shr 8).toByte()
+                maxAmplitude = maxOf(maxAmplitude, abs(adjusted))
+            } else {
+                maxAmplitude = maxOf(maxAmplitude, abs(sample))
             }
         }
+        return maxAmplitude <= silenceThreshold
     }
 
     private fun captureAndStream(channels: Number) {
@@ -263,8 +277,8 @@ class ScreamAudioService : Service() {
         while (isCapturing) {
             try {
                 val bytesRead = audioRecord?.read(buffer, 0, PACKET_SIZE) ?: 0
-                changeVolume(buffer, screamVolume)
-                if (bytesRead > 0 && !isSilent(buffer, bytesRead)) {
+                val isSilent = isSilentAndChangeVolume(buffer, bytesRead, screamVolume)
+                if (bytesRead > 0 && !isSilent) {
                     sendScreamPacket(buffer, bytesRead, screamHeader, packetBuffer)
                     packetCount++
                 }
@@ -278,15 +292,6 @@ class ScreamAudioService : Service() {
         }
 
         Log.i(TAG, "Capture thread ended")
-    }
-
-    private fun isSilent(buffer: ByteArray, bytesRead: Int, silenceThreshold: Int = 200): Boolean {
-        var maxAmplitude = 0
-        for (i in 0 until bytesRead step 2) {
-            val sample = ((buffer[i + 1].toInt() shl 8) or (buffer[i].toInt() and 0xFF))
-            maxAmplitude = maxOf(maxAmplitude, kotlin.math.abs(sample))
-        }
-        return maxAmplitude <= silenceThreshold
     }
 
     private fun sendScreamPacket(
@@ -408,7 +413,7 @@ class ScreamAudioService : Service() {
 
         val builder = NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentText("Streaming audio to Scream receiver...")
-            .setSmallIcon(android.R.drawable.ic_media_play)
+            .setSmallIcon(R.drawable.ic_media_play)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setContentIntent(pendingIntent)
             .setDeleteIntent(deletePendingIntent)
