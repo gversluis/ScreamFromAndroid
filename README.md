@@ -3,7 +3,7 @@
 **Stream audio from your Android device to a Scream receiver.**  
 
 ScreamFromAndroid turns your phone into a network audio source which sends your audio to Scream audio receivers on your local network.
-I wrote this for my own use so it is not tested except for my current Android.
+I wrote this for my own use so it is not tested except for my current Android (GrapheneOS) and my girlfriends (Samsung).
 
 ---
 ## 📌 Features
