@@ -70,6 +70,9 @@ Source: [https://github.com/duncanthrax/scream]
 ---
 ## 🚨 Troubleshooting
 
+It does not work on my Android
+- I just tried it on an older device with LineageOS 21 and it only started working when I updated it to LineageOS 22 (Android 15)
+
 I don't hear sound
 - Make sure your Scream receiver is running
 - Ensure there is an app on your phone which makes sound
